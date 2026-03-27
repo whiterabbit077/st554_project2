@@ -130,3 +130,110 @@ class SparkDataCheck:
         )
 
         return self
+    
+    
+    # Return min and max summaries for one numeric column or all numeric columns
+    def summarize_numeric_min_max(self, column_name: str = None, group_by: str = None):
+        # Check that the grouping column exists if one was provided
+        if group_by is not None and not self._column_exists(group_by):
+            print(f"Column '{group_by}' was not found.")
+            return None
+
+        # If one column is supplied, check that it exists and is numeric
+        if column_name is not None:
+            if not self._column_exists(column_name):
+                print(f"Column '{column_name}' was not found.")
+                return None
+
+            dtype = self._get_dtype(column_name)
+            if not self._is_numeric_dtype(dtype):
+                print(f"Column '{column_name}' is not numeric.")
+                return None
+
+            # Escape column names with special characters
+            col_expr = F.col(f"`{column_name}`")
+
+            # Return min and max without grouping
+            if group_by is None:
+                result = self.df.agg(
+                    F.min(col_expr).alias(f"{column_name}_min"),
+                    F.max(col_expr).alias(f"{column_name}_max")
+                )
+            # Return min and max with grouping
+            else:
+                result = self.df.groupBy(group_by).agg(
+                    F.min(col_expr).alias(f"{column_name}_min"),
+                    F.max(col_expr).alias(f"{column_name}_max")
+                ).orderBy(group_by)
+
+            return result.toPandas()
+
+        # If no column is supplied, find all numeric columns
+        numeric_columns = [
+            col_name for col_name, dtype in self.df.dtypes
+            if self._is_numeric_dtype(dtype)
+        ]
+
+        if not numeric_columns:
+            return None
+
+        # Return one-row summary for all numeric columns
+        if group_by is None:
+            agg_exprs = []
+            for col_name in numeric_columns:
+                col_expr = F.col(f"`{col_name}`")
+                agg_exprs.append(F.min(col_expr).alias(f"{col_name}_min"))
+                agg_exprs.append(F.max(col_expr).alias(f"{col_name}_max"))
+
+            return self.df.agg(*agg_exprs).toPandas()
+
+        # Return grouped summaries for all numeric columns
+        grouped_results = []
+        for col_name in numeric_columns:
+            col_expr = F.col(f"`{col_name}`")
+            one_result = self.df.groupBy(group_by).agg(
+                F.min(col_expr).alias(f"{col_name}_min"),
+                F.max(col_expr).alias(f"{col_name}_max")
+            ).orderBy(group_by).toPandas()
+
+            grouped_results.append(one_result)
+
+        merged = reduce(
+            lambda left, right: pd.merge(left, right, on=group_by, how="outer"),
+            grouped_results
+        )
+
+        return merged
+
+    # Return counts for one string column or two string columns
+    def count_string_levels(self, column1: str, column2: str = None):
+        # Check that the first column exists
+        if not self._column_exists(column1):
+            print(f"Column '{column1}' was not found.")
+            return None
+
+        # Check that the first column is a string
+        dtype1 = self._get_dtype(column1)
+        if not self._is_string_dtype(dtype1):
+            print(f"Column '{column1}' is numeric.")
+            return None
+
+        # Count levels for one string column
+        if column2 is None:
+            result = self.df.groupBy(column1).count().orderBy(column1)
+            return result.toPandas()
+
+        # Check that the second column exists
+        if not self._column_exists(column2):
+            print(f"Column '{column2}' was not found.")
+            return None
+
+        # Check that the second column is a string
+        dtype2 = self._get_dtype(column2)
+        if not self._is_string_dtype(dtype2):
+            print(f"Column '{column2}' is numeric.")
+            return None
+
+        # Count combinations for two string columns
+        result = self.df.groupBy(column1, column2).count().orderBy(column1, column2)
+        return result.toPandas()
